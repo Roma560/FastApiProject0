@@ -19,3 +19,14 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+class PsychicProfileCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+class PsychicProfileResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    avatar_url: Optional[str] = None
+
