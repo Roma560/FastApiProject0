@@ -2,8 +2,8 @@ from fastapi import FastAPI, HTTPException, Depends, status, Path
 from sqlalchemy.orm import Session
 from typing import List
 
-from models import User, UserRole, PsychicProfile
-from shemas import UserCreate, UserResponse, Token, PsychicProfileCreate, PsychicProfileResponse
+from models import User, UserRole, PsychicProfile, Chat, Message
+from shemas import UserCreate, UserResponse, Token, PsychicProfileCreate, PsychicProfileResponse, PsychicProfileUpdate, ChatCreate, ChatResponse, MessageCreate, MessageResponse
 from auth import hash_password, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, SECRET_KEY, ALGORITHM
 from database import SessionLocal, engine
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
@@ -91,6 +91,46 @@ def create_psychic_profile(
     db.refresh(db_profile)
     return db_profile
 
+@app.post("/chats", response_model= ChatResponse)
+def create_chat(
+        chat: ChatCreate,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
+):
+    if current_user.role != UserRole.client:
+        raise HTTPException(status_code=403, detail="Only client can create chats")
+    psychic = db.query(PsychicProfile).filter(PsychicProfile.id==chat.psychic_profile_id).first()
+    if not psychic:
+        raise HTTPException(status_code=404, detail="Psychic profile not found")
+    db_chat = Chat(
+        client_id=current_user.id,
+        psychic_profile_id=chat.psychic_profile_id,
+        is_active=1
+    )
+    db.add(db_chat)
+    db.commit()
+    db.refresh(db_chat)
+    return db_chat
+
+@app.post("/messages", response_model=MessageResponse)
+def send_message(
+    message: MessageCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    chat = db.query(Chat).filter(Chat.id == message.chat_id).first()
+    if not chat or (current_user.role == UserRole.client and int(chat.client_id) != int(current_user.id)):
+        raise HTTPException(status_code=403, detail="You can't send messages to this chat")
+    sender = "admin" if current_user.role == UserRole.admin else "client"
+    db_message = Message(
+        chat_id=message.chat_id,
+        sender=sender,
+        content=message.content
+    )
+    db.add(db_message)
+    db.commit()
+    db.refresh(db_message)
+    return db_message
 
 
 @app.get("/users", response_model=List[UserResponse])
@@ -108,6 +148,26 @@ def get_psychic(psychic_id: int, db: Session = Depends(get_db)):
     if not profile:
         raise HTTPException(status_code=404, detail="Psychic profile not found")
     return profile
+
+@app.get("/chats", response_model=List[ChatResponse])
+def get_chats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role == UserRole.admin:
+        return db.query(Chat).all()
+    return db.query(Chat).filter(Chat.client_id == current_user.id).all()
+
+@app.get("/chats/{chat_id}/messages", response_model=List[MessageResponse])
+def get_chat_messages(
+    chat_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
+    if not chat or (current_user.role == UserRole.client and chat.client_id != current_user.id):
+        raise HTTPException(status_code=403, detail="You can't view messages in this chat")
+    return db.query(Message).filter(Message.chat_id == chat_id).order_by(Message.timestamp).all()
 
 @app.put("/psychics/{psychic_id}", response_model=PsychicProfileResponse)
 def update_psychic_profile(
@@ -142,6 +202,27 @@ def delete_psychic(
     db.delete(db_profile)
     db.commit()
     return {"detail": "Psychic profile deleted"}
+
+@app.patch("/psychics/{psychic_id}")
+def patch_psychic_profile(
+        psychic_id: int,
+        profile_update: PsychicProfileUpdate,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
+
+):
+    if current_user.role != UserRole.admin:
+        raise HTTPException(status_code=403, detail = "Only admins can update psychic profiles")
+    db_profile = db.query(PsychicProfile).filter(PsychicProfile.id == psychic_id).first()
+    if not db_profile:
+        raise HTTPException(status_code=404, detail = "Psychic profile not found")
+    update_data = profile_update.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_profile, key, value)
+    db.commit()
+    db.refresh(db_profile)
+    return db_profile
+
 
 
 
